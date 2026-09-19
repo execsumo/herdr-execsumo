@@ -1,3 +1,16 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.venv/
+
+# agtx: track project config and skills; ignore runtime state
+!.agtx/
+.agtx/*
+!.agtx/config.toml
+!.agtx/skills/
+.agtx/worktrees/
+.agtx/archive/
+
+# Claude Code local settings
+.claude/settings.local.json
