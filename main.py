@@ -107,7 +107,7 @@ class PluginState:
                     return json.load(f)
             except Exception:
                 pass
-        return {"default_enabled": True, "label": DEFAULT_LABEL}
+        return {"default_enabled": True}
 
     def load_state(self) -> Dict[str, Any]:
         cfg = self.load_config()
@@ -119,6 +119,8 @@ class PluginState:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if "enabled" in data:
+                        if data.get("label") == "Space" and "label" not in cfg:
+                            data["label"] = label
                         return data
             except Exception:
                 pass

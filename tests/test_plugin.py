@@ -94,6 +94,15 @@ class TestPluginState(unittest.TestCase):
         self.assertEqual(reloaded["label"], "CustomSpace")
         self.assertIn("updated_at", reloaded)
 
+    def test_legacy_default_label_migrates(self) -> None:
+        state_mgr = main.PluginState()
+        state_mgr.state_file.write_text(
+            json.dumps({"enabled": True, "label": "Space"}), encoding="utf-8"
+        )
+
+        state = state_mgr.load_state()
+        self.assertEqual(state["label"], main.DEFAULT_LABEL)
+
     def test_custom_config(self) -> None:
         config_file = self.config_dir / "config.json"
         config_file.write_text(json.dumps({"default_enabled": False, "label": "MySpace"}), encoding="utf-8")
