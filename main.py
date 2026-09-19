@@ -146,10 +146,29 @@ class SpaceAwareController:
         self.client = client
         self.state_mgr = state_mgr
 
+    def selected_workspace_label(self) -> str:
+        """Return the current workspace label for the agent view heading."""
+        fallback = self.state_mgr.load_config().get("label", DEFAULT_LABEL)
+        try:
+            workspaces = self.client.call("workspace.list", {}).get("workspaces", [])
+        except Exception:
+            return fallback
+
+        focused_id = os.environ.get("HERDR_WORKSPACE_ID")
+        if not focused_id:
+            focused_id = next(
+                (workspace.get("workspace_id") for workspace in workspaces if workspace.get("focused")),
+                None,
+            )
+        for workspace in workspaces:
+            if workspace.get("workspace_id") == focused_id:
+                return workspace.get("label") or focused_id or fallback
+        return fallback
+
     def apply_projection(self, label: Optional[str] = None) -> Dict[str, Any]:
         """Apply space-following agent view projection."""
         state = self.state_mgr.load_state()
-        view_label = label or state.get("label", DEFAULT_LABEL)
+        view_label = label or self.selected_workspace_label()
         source = self.state_mgr.get_source()
 
         # Build declarative projection filter:

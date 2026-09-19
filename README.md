@@ -5,7 +5,7 @@ A [Herdr](https://herdr.dev/) plugin that makes the lower-right-bar **Agents** s
 ## Features
 
 - **Space-Following Agent List**: When a space (workspace or git worktree) is selected in Herdr's Spaces section, only agents active in that space appear in the Agents list.
-- **Dynamic Space Switching**: Switching between spaces automatically and immediately updates the Agents list.
+- **Dynamic Space Switching**: Switching between spaces automatically updates both the Agents list and its label to the selected space name.
 - **Clean Empty & No-Selection States**:
   - If a space has no running agents, the Agents list cleanly displays empty.
   - If no space is selected or all workspaces are closed, the list gracefully handles the absence of selection without error.
@@ -76,13 +76,13 @@ In the popup:
 ## How It Works
 
 1. **Declarative Agent Projection (`agent.view.set`)**:
-   The plugin configures Herdr's built-in agent projection engine via the socket API:
+   The plugin configures Herdr's built-in agent projection engine via the socket API. The label is refreshed from the focused space whenever Herdr emits a workspace event:
    ```json
    {
      "method": "agent.view.set",
      "params": {
        "source": "plugin:herdr-space-aware-agents",
-       "label": "Spaces",
+       "label": "herdr-execsumo",
        "filter": {
          "op": "eq",
          "field": "workspace_id",

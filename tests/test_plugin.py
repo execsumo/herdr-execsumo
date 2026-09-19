@@ -134,14 +134,25 @@ class TestSpaceAwareController(unittest.TestCase):
         self.env_patch.stop()
         self.tmp_dir.cleanup()
 
+    def test_apply_projection_uses_selected_workspace_label(self) -> None:
+        self.mock_client.call.side_effect = [
+            {"workspaces": [{"workspace_id": "w1", "label": "herdr-execsumo", "focused": True}]},
+            {"type": "agent_view", "active": True},
+        ]
+
+        self.controller.apply_projection()
+
+        _, params = self.mock_client.call.call_args_list[1][0]
+        self.assertEqual(params["label"], "herdr-execsumo")
+        self.assertEqual(self.state_mgr.load_state()["label"], "herdr-execsumo")
+
     def test_apply_projection_payload(self) -> None:
         self.mock_client.call.return_value = {"type": "agent_view", "active": True}
 
         res = self.controller.apply_projection()
         self.assertEqual(res["active"], True)
 
-        self.mock_client.call.assert_called_once()
-        call_args = self.mock_client.call.call_args
+        call_args = self.mock_client.call.call_args_list[1]
         method, params = call_args[0]
         self.assertEqual(method, "agent.view.set")
         self.assertEqual(params["source"], "plugin:herdr-space-aware-agents")
