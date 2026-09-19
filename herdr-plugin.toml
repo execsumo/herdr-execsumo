@@ -1,0 +1,53 @@
+id = "herdr-space-aware-agents"
+name = "Space-Aware Agents"
+version = "0.1.0"
+min_herdr_version = "0.7.5"
+description = "Filter lower-right Agents list to follow the space selected in the upper Spaces section"
+platforms = ["linux", "macos", "windows"]
+
+[[startup]]
+command = ["python3", "main.py", "--startup"]
+
+[[events]]
+on = "workspace.focused"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "workspace.created"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "workspace.closed"
+command = ["python3", "main.py", "--event"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle space-aware agent filtering"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "toggle"]
+
+[[actions]]
+id = "enable"
+title = "Enable space-aware agent filtering"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "enable"]
+
+[[actions]]
+id = "disable"
+title = "Disable space-aware agent filtering"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "disable"]
+
+[[actions]]
+id = "status"
+title = "Show space-aware agent filtering status"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "status"]
+
+[[panes]]
+id = "status"
+title = "Space-Aware Agents"
+placement = "popup"
+width = 64
+height = 18
+command = ["python3", "main.py", "--pane"]
