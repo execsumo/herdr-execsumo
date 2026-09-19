@@ -20,6 +20,10 @@ command = ["python3", "main.py", "--event"]
 on = "workspace.closed"
 command = ["python3", "main.py", "--event"]
 
+[[events]]
+on = "workspace.renamed"
+command = ["python3", "main.py", "--event"]
+
 [[actions]]
 id = "toggle"
 title = "Toggle space-aware agent filtering"

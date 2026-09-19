@@ -43,6 +43,7 @@ class TestManifest(unittest.TestCase):
         self.assertIn('on = "workspace.focused"', content)
         self.assertIn('on = "workspace.created"', content)
         self.assertIn('on = "workspace.closed"', content)
+        self.assertIn('on = "workspace.renamed"', content)
 
         # Actions
         self.assertIn('id = "toggle"', content)

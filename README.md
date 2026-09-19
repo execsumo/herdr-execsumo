@@ -10,7 +10,7 @@ A [Herdr](https://herdr.dev/) plugin that makes the lower-right-bar **Agents** s
   - If a space has no running agents, the Agents list cleanly displays empty.
   - If no space is selected or all workspaces are closed, the list gracefully handles the absence of selection without error.
 - **Startup Hook (`[[startup]]`)**: Automatically re-applies the space-aware view projection on server boot or session restore.
-- **Event Hooks (`[[events]]`)**: Listens to `workspace.focused`, `workspace.created`, and `workspace.closed` to ensure the projection remains synchronized.
+- **Event Hooks (`[[events]]`)**: Listens to `workspace.focused`, `workspace.created`, `workspace.closed`, and `workspace.renamed` to keep the projection and label synchronized.
 - **Actions (`[[actions]]`)**: Provides user-invocable actions:
   - `toggle`: Flip between space-aware filtering and viewing all agents across spaces.
   - `enable`: Explicitly enable space-aware filtering.
