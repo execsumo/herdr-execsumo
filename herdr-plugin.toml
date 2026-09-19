@@ -1,8 +1,8 @@
 id = "herdr-space-aware-agents"
 name = "Space-Aware Agents"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.7.5"
-description = "Filter lower-right Agents list to follow the space selected in the upper Spaces section"
+description = "Filter the Agents list to the selected space and nest subagents under the orchestrator that spawned them"
 platforms = ["linux", "macos", "windows"]
 
 [[startup]]
@@ -22,6 +22,22 @@ command = ["python3", "main.py", "--event"]
 
 [[events]]
 on = "workspace.renamed"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "pane.closed"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "pane.moved"
+command = ["python3", "main.py", "--event"]
+
+[[events]]
+on = "tab.moved"
 command = ["python3", "main.py", "--event"]
 
 [[actions]]
@@ -47,6 +63,24 @@ id = "status"
 title = "Show space-aware agent filtering status"
 contexts = ["workspace", "global"]
 command = ["python3", "main.py", "--action", "status"]
+
+[[actions]]
+id = "collapse"
+title = "Collapse or expand the focused agent's subagents"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "collapse"]
+
+[[actions]]
+id = "subagents"
+title = "Hide or show all subagents"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "subagents"]
+
+[[actions]]
+id = "refresh"
+title = "Recompute the agent tree"
+contexts = ["workspace", "global"]
+command = ["python3", "main.py", "--action", "refresh"]
 
 [[panes]]
 id = "status"

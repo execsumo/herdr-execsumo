@@ -29,7 +29,7 @@ class TestManifest(unittest.TestCase):
         content = self.manifest_path.read_text(encoding="utf-8")
         self.assertIn('id = "herdr-space-aware-agents"', content)
         self.assertIn('name = "Space-Aware Agents"', content)
-        self.assertIn('version = "0.1.0"', content)
+        self.assertIn('version = "0.2.0"', content)
         self.assertIn('min_herdr_version = "0.7.5"', content)
         self.assertIn('platforms = ["linux", "macos", "windows"]', content)
 
@@ -50,6 +50,11 @@ class TestManifest(unittest.TestCase):
         self.assertIn('id = "enable"', content)
         self.assertIn('id = "disable"', content)
         self.assertIn('id = "status"', content)
+        self.assertIn('id = "collapse"', content)
+        self.assertIn('id = "subagents"', content)
+        self.assertIn('id = "refresh"', content)
+        self.assertIn('on = "pane.closed"', content)
+        self.assertIn('on = "pane.agent_detected"', content)
 
         # Pane
         self.assertIn("[[panes]]", content)
@@ -159,22 +164,40 @@ class TestSpaceAwareController(unittest.TestCase):
         self.assertEqual(params["source"], "plugin:herdr-space-aware-agents")
         self.assertEqual(params["label"], "Spaces")
 
-        filter_spec = params["filter"]
-        self.assertEqual(filter_spec["op"], "eq")
-        self.assertEqual(filter_spec["field"], "workspace_id")
-        self.assertEqual(filter_spec["value"], {"context": "current_workspace_id"})
+        space_filter, hidden_filter = params["filter"]["filters"]
+        self.assertEqual(params["filter"]["op"], "all")
+        self.assertEqual(space_filter["op"], "eq")
+        self.assertEqual(space_filter["field"], "workspace_id")
+        self.assertEqual(space_filter["value"], {"context": "current_workspace_id"})
+        self.assertEqual(
+            hidden_filter, {"op": "not", "filter": {"op": "exists", "field": {"token": "hidden"}}}
+        )
+        self.assertEqual(params["sort"][1], {"field": {"token": "tree_key"}, "order": "asc"})
 
         # Verify state was persisted as enabled
         state = self.state_mgr.load_state()
         self.assertTrue(state["enabled"])
 
-    def test_clear_projection_payload(self) -> None:
+    def test_clear_projection_keeps_tree_view(self) -> None:
+        self.mock_client.call.return_value = {"type": "agent_view", "active": True}
+
+        self.controller.clear_projection()
+
+        method, params = self.mock_client.call.call_args_list[-1][0]
+        self.assertEqual(method, "agent.view.set")
+        self.assertEqual(params["filter"]["op"], "not")
+
+        state = self.state_mgr.load_state()
+        self.assertFalse(state["enabled"])
+
+    def test_clear_projection_payload_without_tree(self) -> None:
+        Path(self.tmp_dir.name, "config.json").write_text(json.dumps({"tree_enabled": False}))
         self.mock_client.call.return_value = {"type": "agent_view", "active": False}
 
         res = self.controller.clear_projection()
         self.assertEqual(res["active"], False)
 
-        self.mock_client.call.assert_called_once_with(
+        self.mock_client.call.assert_called_with(
             "agent.view.clear", {"source": "plugin:herdr-space-aware-agents"}
         )
 
@@ -234,17 +257,39 @@ class TestActionHandlers(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.mock_controller.get_status.assert_called_once()
 
+    @patch.dict(os.environ, {"HERDR_PLUGIN_EVENT": "workspace.focused"})
     def test_handle_event_enabled(self) -> None:
         self.mock_controller.state_mgr.load_state.return_value = {"enabled": True}
         ret = main.handle_event(self.mock_controller)
         self.assertEqual(ret, 0)
         self.mock_controller.apply_projection.assert_called_once()
 
+    @patch.dict(os.environ, {"HERDR_PLUGIN_EVENT": "workspace.focused"})
     def test_handle_event_disabled(self) -> None:
         self.mock_controller.state_mgr.load_state.return_value = {"enabled": False}
         ret = main.handle_event(self.mock_controller)
         self.assertEqual(ret, 0)
         self.mock_controller.apply_projection.assert_not_called()
+
+    @patch.dict(os.environ, {"HERDR_PLUGIN_EVENT": "pane.closed"})
+    def test_handle_pane_event_refreshes_tree(self) -> None:
+        ret = main.handle_event(self.mock_controller)
+        self.assertEqual(ret, 0)
+        self.mock_controller.refresh_tree.assert_called_once()
+        self.mock_controller.apply_projection.assert_not_called()
+
+    @patch.dict(os.environ, {"HERDR_PLUGIN_CONTEXT_JSON": '{"focused_pane_id": "w1:p2", "workspace_id": "w1"}'})
+    def test_handle_action_collapse_uses_focused_pane(self) -> None:
+        self.mock_controller.toggle_collapse.return_value = "collapsed"
+        ret = main.handle_action(self.mock_controller, "collapse")
+        self.assertEqual(ret, 0)
+        self.mock_controller.toggle_collapse.assert_called_once_with("w1:p2", "w1")
+
+    def test_handle_action_subagents(self) -> None:
+        self.mock_controller.toggle_subagents.return_value = True
+        ret = main.handle_action(self.mock_controller, "subagents")
+        self.assertEqual(ret, 0)
+        self.mock_controller.toggle_subagents.assert_called_once()
 
 
 if __name__ == "__main__":

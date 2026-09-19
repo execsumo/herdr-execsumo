@@ -10,6 +10,7 @@ automatically; empty and no-selection states are handled cleanly.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -17,11 +18,14 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import agent_tree
 
 DEFAULT_PLUGIN_ID = "herdr-space-aware-agents"
 DEFAULT_LABEL = "Spaces"
 SOCKET_TIMEOUT = 3.0
+ACTIONS = ["toggle", "enable", "disable", "status", "collapse", "subagents", "refresh"]
 
 
 class HerdrClient:
@@ -78,6 +82,14 @@ class HerdrClient:
                 return msg.get("result", {})
 
 
+def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
+    # Hooks can run concurrently, so each writer needs its own temp file.
+    temp_file = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(temp_file, path)
+
+
 class PluginState:
     """Manages persistent plugin state and configuration."""
 
@@ -95,6 +107,8 @@ class PluginState:
         os.makedirs(self.config_dir, exist_ok=True)
 
         self.state_file = Path(self.state_dir) / "state.json"
+        self.tree_file = Path(self.state_dir) / "tree.json"
+        self.lock_file = Path(self.state_dir) / "tree.lock"
         self.config_file = Path(self.config_dir) / "config.json"
 
     def get_source(self) -> str:
@@ -133,10 +147,42 @@ class PluginState:
 
     def save_state(self, state: Dict[str, Any]) -> None:
         state["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        temp_file = self.state_file.with_suffix(".tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-        os.replace(temp_file, self.state_file)
+        _atomic_write_json(self.state_file, state)
+
+    def tree_enabled(self) -> bool:
+        return bool(self.load_config().get("tree_enabled", True))
+
+    def load_tree(self) -> Dict[str, Any]:
+        """Lineage, collapsed nodes, and the hide-subagents flag."""
+        data: Dict[str, Any] = {}
+        if self.tree_file.is_file():
+            try:
+                with open(self.tree_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data.setdefault("lineage", {})
+        data.setdefault("collapsed", [])
+        data.setdefault("hide_subagents", False)
+        return data
+
+    def save_tree(self, tree: Dict[str, Any]) -> None:
+        _atomic_write_json(self.tree_file, tree)
+
+    @contextlib.contextmanager
+    def tree_lock(self) -> Iterator[None]:
+        """Serialize tree updates; event hooks can fire concurrently."""
+        try:
+            import fcntl
+        except ImportError:
+            yield
+            return
+        with open(self.lock_file, "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 class SpaceAwareController:
@@ -165,40 +211,131 @@ class SpaceAwareController:
                 return workspace.get("label") or focused_id or fallback
         return fallback
 
-    def apply_projection(self, label: Optional[str] = None) -> Dict[str, Any]:
-        """Apply space-following agent view projection."""
-        state = self.state_mgr.load_state()
-        view_label = label or self.selected_workspace_label()
-        source = self.state_mgr.get_source()
+    def view_params(self, space_filter: bool, label: str) -> Optional[Dict[str, Any]]:
+        """Build the agent view: optional space filter plus the agent tree.
 
-        # Build declarative projection filter:
-        # workspace_id == current_workspace_id
-        params = {
-            "source": source,
-            "label": view_label,
-            "filter": {
+        Returns None when neither feature is on, meaning the view should be cleared.
+        """
+        filters: List[Dict[str, Any]] = []
+        if space_filter:
+            # workspace_id == current_workspace_id
+            filters.append({
                 "op": "eq",
                 "field": "workspace_id",
                 "value": {
                     "context": "current_workspace_id"
                 }
-            }
-        }
+            })
+        tree = self.state_mgr.tree_enabled()
+        if tree:
+            filters.append({"op": "not", "filter": {"op": "exists", "field": {"token": "hidden"}}})
+        if not filters:
+            return None
 
-        result = self.client.call("agent.view.set", params)
-        state["enabled"] = True
+        params: Dict[str, Any] = {
+            "source": self.state_mgr.get_source(),
+            "label": label,
+            "filter": filters[0] if len(filters) == 1 else {"op": "all", "filters": filters},
+        }
+        if tree:
+            params["sort"] = [
+                {"field": "workspace_order", "order": "asc"},
+                {"field": {"token": "tree_key"}, "order": "asc"},
+                {"field": "tab_order", "order": "asc"},
+                {"field": "pane_order", "order": "asc"},
+            ]
+        return params
+
+    def apply_view(self, space_filter: bool, label: Optional[str] = None) -> Dict[str, Any]:
+        state = self.state_mgr.load_state()
+        view_label = label or self.selected_workspace_label()
+        params = self.view_params(space_filter, view_label)
+        if params is None:
+            result = self.client.call("agent.view.clear", {"source": self.state_mgr.get_source()})
+        else:
+            result = self.client.call("agent.view.set", params)
+        state["enabled"] = space_filter
         state["label"] = view_label
         self.state_mgr.save_state(state)
         return result
 
+    def apply_projection(self, label: Optional[str] = None) -> Dict[str, Any]:
+        """Apply space-following agent view projection."""
+        return self.apply_view(True, label)
+
     def clear_projection(self) -> Dict[str, Any]:
-        """Clear the agent view projection, restoring default agent list view."""
-        source = self.state_mgr.get_source()
-        result = self.client.call("agent.view.clear", {"source": source})
-        state = self.state_mgr.load_state()
-        state["enabled"] = False
-        self.state_mgr.save_state(state)
-        return result
+        """Stop filtering by space; the agent tree view stays if enabled."""
+        return self.apply_view(False)
+
+    def reapply_view(self) -> Dict[str, Any]:
+        return self.apply_view(bool(self.state_mgr.load_state().get("enabled", True)))
+
+    def _agents(self) -> List[Dict[str, Any]]:
+        return self.client.call("agent.list", {}).get("agents", [])
+
+    def refresh_tree(self) -> Dict[str, Any]:
+        """Recompute lineage tokens on every live agent pane."""
+        if not self.state_mgr.tree_enabled():
+            return {"patched": 0}
+        with self.state_mgr.tree_lock():
+            agents = self._agents()
+            tree = self.state_mgr.load_tree()
+            lineage = tree["lineage"]
+            agent_tree.ingest_tags(agents, lineage)
+            agent_tree.rebind_and_prune(agents, lineage)
+            live = {a.get("terminal_id") for a in agents}
+            collapsed = {term for term in tree["collapsed"] if term in live}
+            desired = agent_tree.compute_tokens(agents, lineage, collapsed, tree["hide_subagents"])
+            patches = agent_tree.token_patches(agents, desired)
+            source = self.state_mgr.get_source()
+            for pane_id, tokens in patches.items():
+                self.client.call("pane.report_metadata", {"pane_id": pane_id, "source": source, "tokens": tokens})
+            tree["collapsed"] = sorted(collapsed)
+            self.state_mgr.save_tree(tree)
+        return {"patched": len(patches)}
+
+    def toggle_collapse(self, pane_id: Optional[str], workspace_id: Optional[str] = None) -> str:
+        """Collapse or expand the tree under the focused agent.
+
+        Without an agent tree at the focused pane, flips every orchestrator in
+        the workspace: collapse all if any is expanded, otherwise expand all.
+        """
+        with self.state_mgr.tree_lock():
+            agents = self._agents()
+            tree = self.state_mgr.load_tree()
+            agent_tree.ingest_tags(agents, tree["lineage"])
+            collapsed = set(tree["collapsed"])
+            target = agent_tree.toggle_target(agents, tree["lineage"], pane_id)
+            if target is not None:
+                collapsed ^= {target}
+                message = "collapsed" if target in collapsed else "expanded"
+            else:
+                parent_of = agent_tree.build_forest(agents, tree["lineage"])
+                parents = {p for p in parent_of.values() if p is not None}
+                scope = {
+                    a.get("terminal_id") for a in agents
+                    if a.get("terminal_id") in parents
+                    and (workspace_id is None or a.get("workspace_id") == workspace_id)
+                }
+                if scope - collapsed:
+                    collapsed |= scope
+                    message = "collapsed all"
+                else:
+                    collapsed -= scope
+                    message = "expanded all"
+            tree["collapsed"] = sorted(collapsed)
+            self.state_mgr.save_tree(tree)
+        self.refresh_tree()
+        return message
+
+    def toggle_subagents(self) -> bool:
+        """Hide or show every subagent; returns True when subagents are now hidden."""
+        with self.state_mgr.tree_lock():
+            tree = self.state_mgr.load_tree()
+            tree["hide_subagents"] = not tree["hide_subagents"]
+            self.state_mgr.save_tree(tree)
+        self.refresh_tree()
+        return tree["hide_subagents"]
 
     def toggle(self) -> Tuple[bool, Dict[str, Any]]:
         """Toggle between space-aware filtering and unfiltered view."""
@@ -241,36 +378,35 @@ class SpaceAwareController:
             "focused_workspace_id": focused_ws_id,
             "workspaces": workspaces,
             "agents": agents,
+            "tree": self.state_mgr.load_tree() if self.state_mgr.tree_enabled() else None,
         }
 
 
 def handle_startup(controller: SpaceAwareController) -> int:
     """Handle Herdr server startup or session restore hook."""
-    state = controller.state_mgr.load_state()
-    if state.get("enabled", True):
-        try:
-            controller.apply_projection()
-            print(f"[{controller.state_mgr.plugin_id}] Restored space-aware projection")
-        except Exception as e:
-            print(f"[{controller.state_mgr.plugin_id}] Startup error: {e}", file=sys.stderr)
-            return 1
+    try:
+        # Tokens do not survive a server restart; lineage is replayed from plugin state.
+        controller.refresh_tree()
+        controller.reapply_view()
+        print(f"[{controller.state_mgr.plugin_id}] Restored agent view")
+    except Exception as e:
+        print(f"[{controller.state_mgr.plugin_id}] Startup error: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
 def handle_event(controller: SpaceAwareController) -> int:
-    """Handle workspace events (workspace.focused, created, closed)."""
-    state = controller.state_mgr.load_state()
-    if not state.get("enabled", True):
-        return 0
-
+    """Handle workspace events (label refresh) and pane events (agent tree)."""
     event_name = os.environ.get("HERDR_PLUGIN_EVENT", "event")
-    event_json_raw = os.environ.get("HERDR_PLUGIN_EVENT_JSON")
 
     # In Herdr, agent.view.set with {"context": "current_workspace_id"} is evaluated
     # declaratively by the client shell whenever focus moves between spaces.
-    # On workspace lifecycle changes, we verify the projection remains active.
+    # Workspace events refresh the label; pane events only need new tree tokens.
     try:
-        controller.apply_projection()
+        if not event_name.startswith("workspace."):
+            controller.refresh_tree()
+        elif controller.state_mgr.load_state().get("enabled", True):
+            controller.apply_projection()
     except Exception as e:
         print(f"[{controller.state_mgr.plugin_id}] Event ({event_name}) handler error: {e}", file=sys.stderr)
         return 1
@@ -291,6 +427,18 @@ def handle_action(controller: SpaceAwareController, action_name: str) -> int:
         elif action_name == "disable":
             controller.clear_projection()
             print("Space-Aware Agents: DISABLED (showing all agents)")
+        elif action_name == "collapse":
+            context = _plugin_context()
+            pane_id = context.get("focused_pane_id") or os.environ.get("HERDR_PANE_ID")
+            workspace_id = context.get("workspace_id") or os.environ.get("HERDR_WORKSPACE_ID")
+            print(f"Agent tree: {controller.toggle_collapse(pane_id, workspace_id)}")
+        elif action_name == "subagents":
+            hidden = controller.toggle_subagents()
+            print(f"Agent tree: subagents {'hidden' if hidden else 'shown'}")
+        elif action_name == "refresh":
+            controller.refresh_tree()
+            controller.reapply_view()
+            print("Agent tree: refreshed")
         elif action_name == "status":
             info = controller.get_status()
             print(json.dumps(info, indent=2))
@@ -301,6 +449,13 @@ def handle_action(controller: SpaceAwareController, action_name: str) -> int:
         print(f"Action {action_name} failed: {e}", file=sys.stderr)
         return 1
     return 0
+
+
+def _plugin_context() -> Dict[str, Any]:
+    try:
+        return json.loads(os.environ.get("HERDR_PLUGIN_CONTEXT_JSON") or "{}")
+    except ValueError:
+        return {}
 
 
 def _read_single_key() -> str:
@@ -430,7 +585,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Herdr Space-Aware Agents Plugin")
     parser.add_argument("--startup", action="store_true", help="Execute server startup / session restore hook")
     parser.add_argument("--event", action="store_true", help="Execute event hook (workspace events)")
-    parser.add_argument("--action", type=str, choices=["toggle", "enable", "disable", "status"], help="Invoke plugin action")
+    parser.add_argument("--action", type=str, choices=ACTIONS, help="Invoke plugin action")
     parser.add_argument("--pane", action="store_true", help="Open interactive status popup pane")
     parser.add_argument("--status", action="store_true", help="Print current status JSON to stdout")
 
