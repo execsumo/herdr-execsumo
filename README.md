@@ -82,7 +82,7 @@ In the popup:
      "method": "agent.view.set",
      "params": {
        "source": "plugin:herdr-space-aware-agents",
-       "label": "Space",
+       "label": "Spaces",
        "filter": {
          "op": "eq",
          "field": "workspace_id",
@@ -107,7 +107,7 @@ Custom configuration can be placed in `config.json` inside the plugin's config d
 ```json
 {
   "default_enabled": true,
-  "label": "Space"
+  "label": "Spaces"
 }
 ```
 

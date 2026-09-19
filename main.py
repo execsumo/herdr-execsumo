@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_PLUGIN_ID = "herdr-space-aware-agents"
-DEFAULT_LABEL = "Space"
+DEFAULT_LABEL = "Spaces"
 SOCKET_TIMEOUT = 3.0
 
 

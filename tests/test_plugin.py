@@ -136,7 +136,7 @@ class TestSpaceAwareController(unittest.TestCase):
         method, params = call_args[0]
         self.assertEqual(method, "agent.view.set")
         self.assertEqual(params["source"], "plugin:herdr-space-aware-agents")
-        self.assertEqual(params["label"], "Space")
+        self.assertEqual(params["label"], "Spaces")
 
         filter_spec = params["filter"]
         self.assertEqual(filter_spec["op"], "eq")
